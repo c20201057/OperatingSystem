@@ -12,7 +12,7 @@
 
 ## 二、练习2
 ### 1.调试过程及观察结果
-首先，我们运行命令make debug启动qemu，然后打开另一个终端运行make gdb启动gdb进行调试。
+首先，我们运行命令make debug启动qemu，然后在另一个终端运行make gdb启动gdb进行调试。
 
 我们在gdb界面输入`x/5i $pc`，查看即将执行的5条汇编指令。得到结果如下：
 ```assembly
@@ -60,13 +60,15 @@ t0             0x80000000       2147483648
 0x80000024: ld t0,0(t0)                 # 从内存[0x80000420] 处加载一个 64 位值到 t0
 ```
 
-接着输入指令`break kern_entry`，在目标函数kern_entry的入口处设置断点，输出如下：
+接着输入指令`b* kern_entry`，在`<kern_entry>`的入口地址处设置断点，输出如下：
 
 ```assembly
 Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
 ```
 
-`<kern_entry>` 是内核的汇编入口点，是执行真正的内核初始化前的最后一步汇编代码。其入口地址是*0x80200000*。
+<kern_entry> 是内核的汇编入口点，它负责完成内核启动前的最后一段汇编初始化工作（例如设置栈指针等），随后跳转到 C 语言编写的 kern_init 函数，开始执行真正的内核初始化流程。
+
+之所以入口地址是 *0x80200000*，是因为在链接脚本（kernel.ld）中通过BASE_ADDRESS指定了内核的加载基地址：
 
 输入指令`x/5i 0x80200000`，汇编代码及解释如下：
 
@@ -106,7 +108,7 @@ PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
 ```
 这说明OpenSBI此时已经启动。
 
-接着输入指令`break kern_init`，在函数 kern_init 的入口处设置一个断点,输出如下：
+接着输入指令`b* kern_init`，在 `<kern_init>` 的入口地址处设置一个断点,输出如下：
 
 ```assembly
 Breakpoint 2 at 0x8020000a: file kern/init/init.c, line 8.
@@ -125,7 +127,6 @@ Breakpoint 2 at 0x8020000a: file kern/init/init.c, line 8.
    0x000000008020001c <+18>:    li      a1,0                      #a1 = 0
    0x000000008020001e <+20>:    sub     a2,a2,a0                  #a2 = 0x80203008 - 0x80203008 = 0
    0x0000000080200020 <+22>:    sd      ra,8(sp)                  # *(sp + 8) = ra
-
    0x0000000080200022 <+24>:    jal     ra,0x802004b6 <memset>    #跳转到 memset 并把返回地址保存到 ra
    0x0000000080200026 <+28>:    auipc   a1,0x0                    #a1 = pc + (0x0 << 12) = pc = 0x80200026
    0x000000008020002a <+32>:    addi    a1,a1,1186                #a1 = 0x80200026 + 0x4A2 = 0x802004C8
