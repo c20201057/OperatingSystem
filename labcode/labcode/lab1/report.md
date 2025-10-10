@@ -80,7 +80,7 @@ Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
    0x8020000e <kern_init+4>:    addi    a0,a0,-2                    # a0 = a0 - 2 = 0x80203008
 ```
 
-从汇编可以看到，在执行完 kern_entry 后，程序直接跳转到 kern_init，开始执行 C 语言部分的内核初始化。
+从汇编可以看到，在执行完 `kern_entry` 后，程序直接跳转到 `kern_init`，开始执行 C 语言部分的内核初始化。
 
 输入`continue`执行直到断点，debug输出如下：
 
