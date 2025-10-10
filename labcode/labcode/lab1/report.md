@@ -68,7 +68,7 @@ Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
 
 <kern_entry> 是内核的汇编入口点，它负责完成内核启动前的最后一段汇编初始化工作（例如设置栈指针等），随后跳转到 C 语言编写的 kern_init 函数，开始执行真正的内核初始化流程。
 
-之所以入口地址是 0x80200000，是因为在链接脚本（kernel.ld）中通过BASE_ADDRESS指定了内核的加载基地址：
+之所以入口地址是 0x80200000，是因为在链接脚本（kernel.ld）中通过BASE_ADDRESS指定了内核的加载基地址。OpenSBI 会将编译生成的 os.bin（即操作系统内核映像）加载到物理内存的 0x80200000 处，然后将控制权交给它。
 
 输入指令`x/5i 0x80200000`，汇编代码及解释如下：
 
@@ -80,7 +80,7 @@ Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
    0x8020000e <kern_init+4>:    addi    a0,a0,-2                    # a0 = a0 - 2 = 0x80203008
 ```
 
-可以看到在`kern_entry`之后，紧接着就是`kern_init`
+从汇编可以看到，在执行完 kern_entry 后，程序直接跳转到 kern_init，开始执行 C 语言部分的内核初始化。
 
 输入`continue`执行直到断点，debug输出如下：
 
@@ -106,7 +106,7 @@ Runtime SBI Version    : 0.1
 PMP0: 0x0000000080000000-0x000000008001ffff (A)
 PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
 ```
-这说明OpenSBI此时已经启动。
+这说明OpenSBI此时已经启动并运行在物理地址 0x80000000 处。
 
 接着输入指令`b* kern_init`，在 `<kern_init>` 的入口地址处设置一个断点,输出如下：
 
