@@ -107,7 +107,7 @@ struct trapframe
 };
 ```
 tf是一个指针，指向存储在进程内核栈顶部的 trapframe 结构。  
-它用于保存进程的完整处理器状态。陷阱帧记录了所有通用寄存器（gpr）、状态寄存器（status）程序计数器（epc）、导致异常的虚拟地址（badvaddr）以及异常原因代码（cause）等。
+它用于保存进程的完整处理器状态。陷阱帧记录了所有通用寄存器（gpr）、状态寄存器（status）、程序计数器（epc）、导致异常的虚拟地址（badvaddr）以及异常原因代码（cause）等。
 
 在实验中作用：  
 tf 用于处理异常、中断或系统调用（即 CPU 被迫进入内核）。
@@ -290,9 +290,9 @@ static inline void __intr_restore(bool flag) {
     }
 }
 ```
-当调用local_intr_save()时，会读取sstatus寄存器，根据SIE位的值判断进入前中断是否开启。如果该位为1，则说明中断已开启，执行intr_disable()，将SIE位设置为0，关闭中断。函数返回1并将此值保存在 intr_flag 中；如果该位为0，则说明中断已关闭，函数直接返回 0，并将此值保存在 intr_flag 中。
+当调用local_intr_save()时，会读取sstatus寄存器，根据SIE位的值判断原来的中断状态。如果该位为1，则说明中断已开启，执行intr_disable()，将SIE位设置为0，关闭中断。函数返回1并将此值保存在 intr_flag 中；如果该位为0，则说明中断已关闭，函数直接返回 0，并将此值保存在 intr_flag 中。
 
-当需要恢复中断时，调用local_intr_restore()，需要判断intr_flag的值。如果其值为1，则执行intr_enable()，将SIE位设置为1，重新开启中断；如果其值为0，则不执行任何操作，保持中断关闭。
+当需要恢复原状态时，调用local_intr_restore()，需要判断intr_flag的值。如果其值为1，则执行intr_enable()，将SIE位设置为1，重新开启中断；如果其值为0，则不执行任何操作，保持中断关闭。
 
 #### 2.深入理解不同分页模式的工作原理（思考题）
 (1) get_pte()函数中有两段形式类似的代码， 结合sv32，sv39，sv48的异同，解释这两段代码为什么如此相像。  
