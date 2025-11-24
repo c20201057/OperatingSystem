@@ -265,7 +265,7 @@ void proc_run(struct proc_struct *proc)
 4. 实现了新旧进程的上下文切换。
 5. 最后将中断允许。
 
-在本次实验的过程中，创建了两个进程，分别是 idleproc 和 initproc 。只创建并运行了一个进程 initproc。
+在本次实验的过程中，创建并运行了两个进程，分别是 idleproc 和 initproc 。
 
 运行截图：
 ![image-20251123221142293](C:\Users\LiJiapu\AppData\Roaming\Typora\typora-user-images\image-20251123221142293.png)
