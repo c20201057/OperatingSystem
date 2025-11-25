@@ -265,7 +265,7 @@ void proc_run(struct proc_struct *proc)
 4. 实现了新旧进程的上下文切换。
 5. 最后将中断允许。
 
-在本次实验的过程中，创建了两个进程，分别是 idleproc 和 initproc 。只创建并运行了一个进程 initproc。
+在本次实验的过程中，创建并运行了两个进程，分别是 idleproc 和 initproc 。
 
 运行截图：
 ![image-20251123221142293](C:\Users\LiJiapu\AppData\Roaming\Typora\typora-user-images\image-20251123221142293.png)
@@ -292,7 +292,7 @@ static inline void __intr_restore(bool flag) {
 ```
 当调用local_intr_save()时，会读取sstatus寄存器，根据SIE位的值判断原来的中断状态。如果该位为1，则说明中断已开启，执行intr_disable()，将SIE位设置为0，关闭中断。函数返回1并将此值保存在 intr_flag 中；如果该位为0，则说明中断已关闭，函数直接返回 0，并将此值保存在 intr_flag 中。
 
-当需要恢复原状态时，调用local_intr_restore()，需要判断intr_flag的值。如果其值为1，则执行intr_enable()，将SIE位设置为1，重新开启中断；如果其值为0，则不执行任何操作，保持中断关闭。
+当需要恢复中断时，调用local_intr_restore()，需要判断intr_flag的值。如果其值为1，则执行intr_enable()，将SIE位设置为1，重新开启中断；如果其值为0，则不执行任何操作，保持中断关闭。
 
 #### 2.深入理解不同分页模式的工作原理（思考题）
 (1) get_pte()函数中有两段形式类似的代码， 结合sv32，sv39，sv48的异同，解释这两段代码为什么如此相像。  
