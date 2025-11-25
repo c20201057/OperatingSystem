@@ -212,7 +212,7 @@ void proc_run(struct proc_struct *proc)
             run_kthreads++;
         }
 
-        lsatp(proc->pgdir);
+       // lsatp(proc->pgdir);
 
         switch_to(&prev->context, &proc->context);
 
