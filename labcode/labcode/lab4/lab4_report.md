@@ -268,7 +268,9 @@ void proc_run(struct proc_struct *proc)
 在本次实验的过程中，创建并运行了两个进程，分别是 idleproc 和 initproc 。
 
 运行截图：
-![image-20251123221142293](C:\Users\LiJiapu\AppData\Roaming\Typora\typora-user-images\image-20251123221142293.png)
+![结果](\结果图.png)
+
+![结果](\结果图2.png)
 
 ### 扩展练习 Challenge
 
