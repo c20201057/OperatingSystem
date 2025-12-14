@@ -31,7 +31,7 @@ DTB init completed
 
 Special kernel symbols:
   entry  0xc020004a (virtual)
-  etext  0xc0203f2c (virtual)
+  etext  0xc0203f70 (virtual)
   edata  0xc0209030 (virtual)
   end    0xc020d4f8 (virtual)
 Kernel executable memory footprint: 54KB
