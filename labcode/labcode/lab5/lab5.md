@@ -233,12 +233,303 @@ ret = page_insert(to, npage, start, perm);
 2. **页访问异常处理阶段**：
 
 - 当发生“写错误”（权限不足）时，检查对应的虚拟内存区域是否本来是可写的。
-
 - 如果是，说明这是 CoW 触发的。
-
 - 分配新页，拷贝原数据。
-
 - 更新 PTE：指向新页，并**恢复 PTE_W 权限**。
+
+### 练习3：阅读分析源代码，理解进程执行 fork/exec/wait/exit 的实现，以及系统调用的实现（不需要编码）
+
+#### 一、fork/exec/wait/exit 执行流程分析
+
+##### 1. fork 执行流程
+
+```
+用户态                              内核态
+───────                            ─────────
+fork()
+  │
+  └─→ sys_fork()
+        │
+        └─→ syscall(SYS_fork)
+              │
+              │  ecall 指令
+              ╰─────────────────→ trap() → exception_handler()
+                                    │
+                                    └─→ syscall() [kern/syscall/syscall.c:82]
+                                          │
+                                          └─→ sys_fork() [kern/syscall/syscall.c:16]
+                                                │
+                                                └─→ do_fork() [kern/process/proc.c:437]
+                                                      │
+                                                      ├─ alloc_proc()      分配PCB
+                                                      ├─ setup_kstack()    分配内核栈
+                                                      ├─ copy_mm()         复制内存空间
+                                                      ├─ copy_thread()     复制trapframe
+                                                      ├─ get_pid()         分配PID
+                                                      ├─ hash_proc()       加入哈希表
+                                                      ├─ set_links()       设置进程关系
+                                                      └─ wakeup_proc()     唤醒子进程
+                                    │
+              ╭─────────────────────╯ (返回值存入 tf->gpr.a0)
+              │  sret 指令返回
+用户态继续执行 ←╯
+(父进程返回子进程PID，子进程返回0)
+```
+
+##### 2. exec 执行流程
+
+```
+用户态                              内核态
+───────                            ─────────
+(通过 kernel_execve)
+  │
+  │  ebreak 指令
+  ╰─────────────────────→ trap() → exception_handler()
+                                    │ (CAUSE_BREAKPOINT, a7=10)
+                                    │
+                                    └─→ syscall()
+                                          │
+                                          └─→ sys_exec() [kern/syscall/syscall.c:30]
+                                                │
+                                                └─→ do_execve() [kern/process/proc.c:775]
+                                                      │
+                                                      ├─ 释放旧内存空间
+                                                      │   ├─ exit_mmap()
+                                                      │   ├─ put_pgdir()
+                                                      │   └─ mm_destroy()
+                                                      │
+                                                      └─ load_icode()  加载新程序
+                                                           ├─ mm_create()      创建新mm
+                                                           ├─ setup_pgdir()    创建页表
+                                                           ├─ 解析ELF，复制代码/数据段
+                                                           ├─ 创建用户栈
+                                                           └─ 设置trapframe
+                                                              ├─ tf->sp = USTACKTOP
+                                                              ├─ tf->epc = elf->e_entry
+                                                              └─ tf->status (清SPP,设SPIE)
+                                    │
+              ╭─────────────────────╯ sret 返回
+              │
+用户态执行新程序 ←╯ (从 elf->e_entry 开始)
+```
+
+##### 3. wait 执行流程
+
+```
+用户态                              内核态
+───────                            ─────────
+wait() / waitpid()
+  │
+  └─→ sys_wait(pid, store)
+        │
+        │  ecall 指令
+        ╰─────────────────→ syscall()
+                                    │
+                                    └─→ sys_wait() → do_wait() [proc.c:826]
+                                          │
+                                          ├─ 查找子进程
+                                          │   ├─ pid≠0: find_proc(pid)
+                                          │   └─ pid=0: 遍历 cptr 链表
+                                          │
+                                          ├─ 子进程为 ZOMBIE?
+                                          │   │
+                                          │   ├─ 是: 回收资源
+                                          │   │     ├─ *code_store = exit_code
+                                          │   │     ├─ unhash_proc()
+                                          │   │     ├─ remove_links()
+                                          │   │     ├─ put_kstack()
+                                          │   │     └─ kfree(proc)
+                                          │   │
+                                          │   └─ 否: 睡眠等待
+                                          │         ├─ state = PROC_SLEEPING
+                                          │         ├─ wait_state = WT_CHILD
+                                          │         └─ schedule()
+                                          │              (子进程exit时唤醒)
+                                    │
+              ╭─────────────────────╯
+用户态继续 ←──╯ (返回 0 或错误码)
+```
+
+##### 4. exit 执行流程
+
+```
+用户态                              内核态
+───────                            ─────────
+exit(error_code)
+  │
+  └─→ sys_exit(error_code)
+        │
+        │  ecall 指令
+        ╰─────────────────→ syscall()
+                                    │
+                                    └─→ sys_exit() → do_exit() [proc.c:529]
+                                          │
+                                          ├─ 释放内存资源
+                                          │   ├─ exit_mmap(mm)
+                                          │   ├─ put_pgdir(mm)
+                                          │   └─ mm_destroy(mm)
+                                          │
+                                          ├─ current->state = PROC_ZOMBIE
+                                          ├─ current->exit_code = error_code
+                                          │
+                                          ├─ 唤醒父进程 (如果在等待)
+                                          │   └─ wakeup_proc(parent)
+                                          │
+                                          ├─ 孤儿进程托管给 initproc
+                                          │
+                                          └─ schedule()  (不再返回)
+
+(进程终止，不返回用户态)
+```
+
+#### 二、用户态与内核态操作的区分
+
+##### 用户态完成的操作
+
+| 函数 | 用户态操作 |
+|------|-----------|
+| fork | 调用 `fork()` → `sys_fork()` → 执行 `ecall` 指令触发系统调用 |
+| exec | (内核线程通过 `ebreak` 触发) |
+| wait | 调用 `wait()`/`waitpid()` → `sys_wait()` → 执行 `ecall` 指令 |
+| exit | 调用 `exit()` → `sys_exit()` → 执行 `ecall` 指令 |
+
+##### 内核态完成的操作
+
+| 函数 | 内核态操作 |
+|------|-----------|
+| fork | PCB分配、内核栈分配、内存复制、页表复制、进程关系设置、调度 |
+| exec | 旧内存释放、ELF解析、代码段加载、用户栈创建、trapframe设置 |
+| wait | 子进程查找、进程状态检查、睡眠等待、资源回收 |
+| exit | 内存释放、状态设置、父进程唤醒、孤儿托管、调度 |
+
+#### 三、用户态与内核态的交错执行机制
+
+##### 1. 进入内核态
+
+用户程序通过 `ecall` 指令触发异常：
+
+```c
+// user/libs/syscall.c:19-31
+asm volatile (
+    "ld a0, %1\n"
+    "ld a1, %2\n"
+    ...
+    "ecall\n"      // 触发 CAUSE_USER_ECALL 异常
+    "sd a0, %0"    // 获取返回值
+    ...
+);
+```
+
+CPU 自动完成以下操作：
+- 保存 PC 到 `sepc` 寄存器
+- 保存特权级到 `sstatus.SPP`
+- 切换到 S-mode（内核态）
+- 跳转到 `stvec` 指向的异常入口（`__alltraps`）
+
+##### 2. 内核处理系统调用
+
+```c
+// kern/trap/trap.c:190-194
+case CAUSE_USER_ECALL:
+    tf->epc += 4;     // 跳过 ecall 指令
+    syscall();        // 分发并处理系统调用
+    break;
+```
+
+系统调用分发过程：
+```c
+// kern/syscall/syscall.c:82-94
+void syscall(void) {
+    struct trapframe *tf = current->tf;
+    int num = tf->gpr.a0;                    // 从a0获取系统调用号
+    arg[0] = tf->gpr.a1;                     // 从a1-a5获取参数
+    ...
+    tf->gpr.a0 = syscalls[num](arg);         // 执行并将返回值存入a0
+}
+```
+
+##### 3. 返回用户态
+
+通过 `sret` 指令完成：
+- 从 `sepc` 恢复 PC（指向ecall的下一条指令）
+- 从 `sstatus.SPP` 恢复特权级
+- 切换回 U-mode（用户态）
+
+##### 4. 返回值传递机制
+
+内核将返回值写入 trapframe 的 a0 寄存器：
+```c
+tf->gpr.a0 = syscalls[num](arg);  // 返回值写入 trapframe
+```
+
+用户态从 a0 寄存器获取返回值：
+```c
+"sd a0, %0"  // 将 a0 的值存入 ret 变量
+```
+
+#### 四、用户态进程的执行状态生命周期图
+
+```
+                                    alloc_proc()
+                                         │
+                                         ▼
+                                 ┌───────────────┐
+                                 │  PROC_UNINIT  │
+                                 │   (未初始化)   │
+                                 └───────┬───────┘
+                                         │
+                          proc_init() / wakeup_proc()
+                                         │
+                                         ▼
+         ┌──────────────────────────────────────────────────────────┐
+         │                                                          │
+         │                    ┌───────────────┐                     │
+         │       ┌──────────▶│ PROC_RUNNABLE │◀──────────┐         │
+         │       │            │   (就绪/运行)  │           │         │
+         │       │            └───────┬───────┘           │         │
+         │       │                    │                   │         │
+         │       │               proc_run()               │         │
+         │       │               (被调度)                  │         │
+         │       │                    │                   │         │
+         │       │                    ▼                   │         │
+         │       │            ┌───────────────┐           │         │
+         │       │            │   RUNNING     │           │         │
+         │       │            │   (正在运行)   │           │         │
+         │       │            └───────┬───────┘           │         │
+         │       │                    │                   │         │
+         │       │         ┌──────────┼──────────┐        │         │
+         │       │         │          │          │        │         │
+         │       │   do_yield()  do_wait()   do_exit()    │         │
+         │       │   时间片耗尽  do_sleep()       │        │         │
+         │       │         │          │          │        │         │
+         │       │         │          ▼          │        │         │
+         │       │         │  ┌───────────────┐  │        │         │
+         │       │         │  │PROC_SLEEPING  │  │        │         │
+         │       │         │  │   (睡眠)      │  │        │         │
+         │       │         │  └───────┬───────┘  │        │         │
+         │       │         │          │          │        │         │
+         │       │         │    wakeup_proc()    │        │         │
+         │       │         │     (被唤醒)        │        │         │
+         │       │         │          │          │        │         │
+         │       └─────────┴──────────┘          │        │         │
+         │                                       │        │         │
+         │                                       ▼        │         │
+         │                               ┌───────────────┐│         │
+         │                               │ PROC_ZOMBIE   ││         │
+         │                               │   (僵尸)      ││         │
+         │                               └───────┬───────┘│         │
+         │                                       │        │         │
+         │                                 do_wait()      │         │
+         │                                (父进程回收)     │         │
+         │                                       │        │         │
+         │                                       ▼        │         │
+         │                               ┌───────────────┐│         │
+         │                               │   释放资源     ││         │
+         │                               │ (进程消亡)     ││         │
+         │                               └───────────────┘│         │
+         │                                                          │
+         └──────────────────────────────────────────────────────────┘
+```
 
 ### 分支任务：gdb调试系统调用以及返回
 
@@ -572,168 +863,3 @@ kernel_thread_entry () at kern/process/entry.S:4
 说明sret指令的下一步就是entry.S文件中的`kernel_thread_entry`函数。
 
 通过以上步骤，我们成功地调试了 sret 指令的异常返回流程，理解了 QEMU 如何模拟 RISC-V CPU 处理从内核态返回用户态的机制。
-
-### Challenge：实现 copy on write 机制
-
-**内存映射建立阶段 (`pmm.c: copy_range`)**：
-
-对于 copy_range 我们修改如下：
-
-```
-npage = page; 
-if (*ptep & PTE_W) {
-	*ptep = (*ptep) & (~PTE_W);
-	tlb_invalidate(from, start);
-}
-ret = page_insert(to, npage, start, perm & (~PTE_W));
-```
-
-具体来说，就是直接服用旧页，同时将父进程写权限去除。最后建立只读映射。
-
-**页访问异常处理阶段**：
-
-我们添加缺页异常处理函数，在 CAUSE_STORE_PAGE_FAULT 时调用。
-
-首先识别目前是因为写权限不足导致异常：
-
-```
-if (*ptep & PTE_V) {
-    if ((error_code & 2) && !(*ptep & PTE_W)) {
-```
-
-1. `*ptep & PTE_V`：页表项是有效的（说明不是单纯的内存未分配，而是权限问题）。
-
-2. `(error_code & 2)`：发生的是写操作。
-
-3. `!(*ptep & PTE_W)`：当前页表项不可写。
-
-然后分如下情况处理：
-
-1. 如果引用数为一，说明目前没有子进程共享页，不需要复制，同时还要恢复其写权限。
-
-   ```
-   if (page_ref(page) == 1) {
-       page_insert(mm->pgdir, page, addr, (*ptep & PTE_USER) | PTE_W);
-       ret = 0;
-   }
-   ```
-
-   2.否则，我们进行复制，既是分配新页，数据拷贝，重新映射三个步骤。
-
-   ```
-   else {
-       struct Page *npage = alloc_page();
-       void *src_kvaddr = page2kva(page);
-       void *dst_kvaddr = page2kva(npage);
-       memcpy(dst_kvaddr, src_kvaddr, PGSIZE); // 复制数据
-   
-       uint32_t perm = (*ptep & PTE_USER) | PTE_W; // 赋予写权限
-       if (page_insert(mm->pgdir, npage, addr, perm) != 0) { ... }
-       ret = 0;
-   }
-   ```
-
-   
-
-测试用例：
-
-```
-#include <stdio.h>
-#include <ulib.h>
-#include <string.h>
-
-/* 定义一个足够大的全局数组，确保跨越多个页 */
-#define ARRAY_SIZE 4096 
-volatile int global_data[ARRAY_SIZE];
-volatile int simple_var = 100;
-
-int main(void) {
-    cprintf("---------- COW TEST START ----------\n");
-
-    // 1. 初始化数据
-    int i;
-    for (i = 0; i < ARRAY_SIZE; i++) {
-        global_data[i] = i;
-    }
-    cprintf("Parent: Data initialized.\n");
-
-    // 2. 打印 fork 前的剩余物理页（可选，如果你的 ucore 实现了 sys_get_free_pages）
-    // cprintf("Free pages before fork: %d\n", sys_get_free_pages());
-
-    int pid = fork();
-
-    if (pid == 0) {
-        /* =================================================
-         * 子进程执行区域
-         * ================================================= */
-        cprintf("Child: I am running.\n");
-
-        // [测试点 1]: 读取数据
-        // 此时不应该触发 Page Fault (因为是只读)，应该直接读取共享页
-        cprintf("Child: Check simple_var = %d (Expect 100)\n", simple_var);
-        assert(simple_var == 100);
-        cprintf("Child: Check global_data[0] = %d (Expect 0)\n", global_data[0]);
-        assert(global_data[0] == 0);
-
-        // [测试点 2]: 触发 COW (写操作)
-        cprintf("Child: WRITING data to trigger COW...\n");
-        
-        // 这里的写操作应该触发 Store Page Fault -> do_pgfault -> 复制物理页
-        simple_var = 200;
-        global_data[0] = 9999;
-        
-        cprintf("Child: Modified simple_var to %d\n", simple_var);
-        cprintf("Child: Modified global_data[0] to %d\n", global_data[0]);
-
-        // 确保子进程读到的是修改后的值
-        assert(simple_var == 200);
-        assert(global_data[0] == 9999);
-
-        cprintf("Child: Exit.\n");
-        exit(0);
-    } 
-    else {
-        /* =================================================
-         * 父进程执行区域
-         * ================================================= */
-        cprintf("Parent: Waiting for child...\n");
-        
-        // 等待子进程结束，确保子进程已经执行了写操作
-        if (waitpid(pid, NULL) == 0) {
-            cprintf("Parent: Child exited.\n");
-        }
-
-        // [测试点 3]: 检查父进程的数据是否被污染
-        // 如果 COW 实现正确，父进程的物理页应该保持原样，不受子进程影响
-        cprintf("Parent: Checking data integrity...\n");
-
-        cprintf("Parent: simple_var = %d (Expect 100)\n", simple_var);
-        if (simple_var != 100) {
-            panic("COW FAIL: Parent's simple_var changed! Memory is incorrectly shared.\n");
-        }
-
-        cprintf("Parent: global_data[0] = %d (Expect 0)\n", global_data[0]);
-        if (global_data[0] != 0) {
-            panic("COW FAIL: Parent's array changed! Memory is incorrectly shared.\n");
-        }
-
-        cprintf("---------- COW TEST PASSED ----------\n");
-    }
-
-    return 0;
-}
-```
-
-测试结果：
-
-![image-20251214162758485](.\RES.png)
-
-#### 用户程序何时被预先加载到内存中？
-
-在 ucore 中用户程序的二进制在构建时被嵌入到内核镜像，因此内核镜像加载到内存后这些二进制数据就已经驻留在物理内存中；但它们并不会自动成为某个进程的用户虚拟空间内容。
-
-真正把程序装入某个进程的用户地址空间是在执行 `exec` 时由内核完成：`do_execve` → `load_icode(binary,size)`，内核为每个可加载段分配用户页，用 `memcpy(page2kva(page)+off, from, size)` 将二进制段从内核镜像复制到这些用户页，使用 `memset` 清零 BSS，并为用户栈分配页面（`USTACKTOP`）。
-
-因此 ucore 的实现是“内存到内存的一次性拷贝、无磁盘 I/O”，与常见操作系统从磁盘读取可执行文件并常用按需缺页加载的策略不同。
-
-
