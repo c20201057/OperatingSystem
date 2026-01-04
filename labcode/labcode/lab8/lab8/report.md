@@ -23,33 +23,52 @@
 #### 核心代码实现如下：
 
 ```c
-// 第(1)部分：处理未对齐的起始块
-uint32_t blkoff = offset % SFS_BLKSIZE;
-if (blkoff != 0) {
-    size_t size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
-    if ((ret = sfs_rbuf(sfs, ino, buf, size, blkoff)) != 0) {
-        goto out;
+    // (1) 处理起始不对齐的块
+    blkoff = offset % SFS_BLKSIZE;
+    if (blkoff != 0) {
+        size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
+        }
+        if ((ret = sfs_buf_op(sfs, buf, size, ino, blkoff)) != 0) {
+            goto out;
+        }
+        alen += size;
+        buf += size;
+        if (nblks == 0) { 
+            goto out; 
+        } 
+        blkno++; 
+        nblks--;
     }
-    if (nblks == 0) goto out;
-}
 
-// 第(2)部分：处理对齐的完整块
-while (nblks > 0) {
-    ablock = sfs_bmap_load_nolock(sfs, ino, blkno);
-    if ((ret = sfs_rblock(sfs, ablock, buf, SFS_BLKSIZE)) != 0) {
-        goto out;
+    // (2) 处理中间对齐的完整块
+    if (nblks > 0) {
+        while (nblks > 0) {
+            if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+                goto out;
+            }
+            if ((ret = sfs_block_op(sfs, buf, ino, 1)) != 0) {
+                goto out;
+            }
+            alen += SFS_BLKSIZE;
+            buf += SFS_BLKSIZE;
+            blkno++;
+            nblks--;
+        }
     }
-    nblks--, blkno++, buf += SFS_BLKSIZE;
-}
 
-// 第(3)部分：处理未对齐的末尾块
-if (endpos % SFS_BLKSIZE != 0) {
-    ablock = sfs_bmap_load_nolock(sfs, ino, blkno);
-    size_t size = endpos % SFS_BLKSIZE;
-    if ((ret = sfs_rbuf(sfs, ablock, buf, size, 0)) != 0) {
-        goto out;
+    // (3) 处理结尾不对齐的块
+    size = endpos % SFS_BLKSIZE;
+    if (size != 0) {
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
+        }
+        if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0) {
+            goto out;
+        }
+        alen += size;
     }
-}
 ```
 
 我们采用三部分处理算法来处理任意对齐的文件 I/O 操作：
@@ -318,33 +337,6 @@ tf->status |= SSTATUS_SPIE;
   - `tf->status |= SSTATUS_SPIE`：设置 SPIE 位
     - SPIE (Supervisor Previous Interrupt Enable) 控制返回后的中断使能状态
     - 设置为 1 表示返回用户态后使能中断
-
----
-
-#### 辅助函数：load_icode_read()
-```c
-static int
-load_icode_read(int fd, void *buf, size_t len, off_t offset)
-{
-    int ret;
-    if ((ret = file_seek(fd, offset, LSEEK_SET)) != 0)
-    {
-        return ret;
-    }
-    size_t copied;
-    if ((ret = file_read(fd, buf, len, &copied)) != 0)
-    {
-        return (ret < 0) ? ret : -1;
-    }
-    return 0;
-}
-```
-
-**代码解释：**
-
-我们将原来代码中的`sysfile_read()`和`sysfile_seek()`替换为`file_read()`和`file_seek()`。原因如下：
-
-  `file_read()` 和 `file_seek()` 是内核内部的文件操作接口，可以在内核态直接调用。而 `sysfile_read()` 和 `sysfile_seek()` 是系统调用包装器，需要完整的用户态上下文（mm 结构）。在 `load_icode()` 执行期间，新进程的 mm 正在构建中，还不能使用系统调用接口
 
 ---
 
