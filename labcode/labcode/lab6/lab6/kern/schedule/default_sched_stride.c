@@ -8,8 +8,8 @@
 #define USE_SKEW_HEAP 1
 
 /* You should define the BigStride constant here*/
-/* LAB6 CHALLENGE 1: 2314007 */
-#define BIG_STRIDE (1u << 20) /* a large base stride */
+/* LAB6 CHALLENGE 1: 2313983 */
+#define BIG_STRIDE (1u << 30) /* a large base stride */
 
 /* The compare function for two skew_heap_node_t's and the
  * corresponding procs*/
@@ -65,7 +65,9 @@ static void
 stride_enqueue(struct run_queue *rq, struct proc_struct *proc)
 {
      /* insert into skew heap as priority queue (min stride at root) */
-     proc->time_slice = rq->max_time_slice;
+     if (proc->time_slice == 0 || proc->time_slice > rq->max_time_slice) {
+         proc->time_slice = rq->max_time_slice;
+     }
      proc->rq = rq;
      /* ensure priority is valid */
      if (proc->lab6_priority == 0)
@@ -86,6 +88,7 @@ stride_enqueue(struct run_queue *rq, struct proc_struct *proc)
 static void
 stride_dequeue(struct run_queue *rq, struct proc_struct *proc)
 {
+     assert(proc->rq == rq && rq->proc_num > 0);
      rq->lab6_run_pool = skew_heap_remove(rq->lab6_run_pool, &proc->lab6_run_pool, proc_stride_comp_f);
      proc->rq = NULL;
      rq->proc_num--;
