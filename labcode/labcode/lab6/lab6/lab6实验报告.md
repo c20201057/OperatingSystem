@@ -228,3 +228,79 @@ Total Score: 50/50
   - 当前实现面向单核；
   - 要支持多核需改进：每核维护独立 runqueue、增加自旋锁/原子更新、实现跨核唤醒与负载均衡。
 
+## Challenge 1: 实现 Stride Scheduling 调度算法
+
+### 1. 多级反馈队列概要设计
+
+维护若干优先级的 `run_queue`（优先级越高时间片越短），每级可用 RR 运行。整体思路是优先做短作业，长作业会被下放。
+
+新建/被唤醒的进程入最高级，时间片耗尽的进程降级到下一队列，说明这个进程用时较长，需要下放。长期未运行的进程可按 aging 机制提升，避免饥饿。
+
+选择策略：`pick_next` 从最高非空队列取队头；`proc_tick` 扣时间片并决定是否降级。
+
+关键点：按级别设定不同时间片；用定期扫描或时间戳实现 aging；每级队列独立锁/禁中断保护。
+
+### 2. 每个进程分配到的时间片数目和优先级成正比的证明
+
+我们定义步幅 `pass = BIG_STRIDE / priority`，每次被调度后 `stride += pass`。
+
+将调度次数记为 `k_i`，有 `stride_i ≈ k_i * (BIG_STRIDE/pri_i)`。由于选取最小 `stride`，各进程的 `stride` 差保持在一个常数级，故 `k_i / pri_i ≈ k_j / pri_j`，即运行次数与优先级成正比。
+
+### 3. Stride调度算法实现过程
+
+首先讲思路，其实就是在 RR 调度算法基础上，加入了优先级 `priority` 的概念。对于每个进程累计`pass = BIG_STRIDE / priority` 到 `stride` 中，每次取 `stride` 最小的那个进程。由于 `pass` 与 `priority` 呈反比，而 `BIG_STRIDE` 是固定的一个大常数，所以高优先级的进程 `stride` 累计速度更慢，更容易被取出，实现优先级。
+
+在实现过程中首先需要讲调度类切换，在 `kern/schedule/sched.c` 中，将 `sched_class` 设为 `stride_sched_class`，启动时打印 `stride_scheduler`。
+
+数据结构：`run_queue` 增加 `lab6_run_pool` 作为 skew-heap 根，即优先队列，进程结构包含 `lab6_run_pool` 节点、`lab6_stride`、`lab6_priority`。
+
+关键函数（`kern/schedule/default_sched_stride.c`）：
+
+`stride_init`：初始化 run_list、`lab6_run_pool=NULL`、`proc_num=0`。
+
+`stride_enqueue`：校正时间片（为 0 或超上限则重置），优先级兜底为 1，然后用 `skew_heap_insert` 入队，`proc_num++`。
+
+`stride_dequeue`：断言归属，`skew_heap_remove` 删除节点，`proc_num--`，清空 `proc->rq`。
+
+`stride_pick_next`：堆空返回 NULL；否则取堆根进程，更新 `lab6_stride += BIG_STRIDE/priority` 后返回。
+
+`stride_proc_tick`：idle 直接置 `need_resched`；普通进程时间片递减，耗尽则置 `need_resched=1`。
+
+测试观察：`sched result` 序列倾向高优进程，表明 stride 生效。
+
+### 4. 两个提问
+
+**提问1：如何证明STRIDE_MAX – STRIDE_MIN <= PASS_MAX**
+
+非常好证明，因为每次会取 `STRIDE_MIN` ，最多加上一个 `PASS_MAX`。而 `STRIDE_MAX` 必然也是在之前小于等于 `STRIDE_MIN` 的时候，加上了一个 `pass = BIG_STRIDE / priority` ，变成了 `STRIDE_MAX`。即 `STRIDE_MAX – PASS_MAX <= STRIDE_MIN`，移项即可获得证明式。
+
+而 `pass` 最大即是当 `priority = 1` 的时候，所以我们顺便还可以推出 **STRIDE_MAX – STRIDE_MIN <= BIG_STRIDE**.
+
+**提问2：在 ucore 中，目前Stride是采用无符号的32位整数表示。则BigStride应该取多少，才能保证比较的正确性？**
+
+这个问题相当有趣，所以我一定要写上一写。
+
+由于Stride是采用无符号的32位整数表示，那么溢出之后的数字，自然会比即将溢出的数字小，直接比较数值就会出错。
+
+巧的是我们可以利用提问1中推出的 `STRIDE_MAX – STRIDE_MIN <= BIG_STRIDE` 来解决这个问题。
+
+首先必须要说明的是，` STRIDE_MAX` 并不是数值最大的那个 stride，而是目前累加 `pass = BIG_STRIDE / priority` 最多的那个。因为在 ucore 中，Stride 是采用无符号的32位整数表示，可能会有溢出。
+
+我们判断两个进程谁的 `stride` 积累更多，就是通过二者相减，将二者之差转为32位的有符号整数，比较正负。有趣之点在于为什么要将二者之差转换为32位的有符号整数，比较正负，下面我们来说明一下。
+
+如果这样做，需要有两个性质：
+
+1. `STRIDE_MAX – STRIDE_MIN <= BIG_STRIDE <= 0x7FFFFFFF`，因为要求大数减小数转换成有符号整数后为正。
+2. `STRIDE_MIN – STRIDE_MAX > 0x7FFFFFFF`，因为要求小数减大数转换成有符号整数后为负，即需要超过 $2^{31}-1$。
+
+以上两个不等式均在无符号的32位整数间计算，遵循自然溢出。
+
+如果我们将第二条转换为有符号的正常计算，则可以简单表示为 $\text{STRIDE_MIN}\ –\ \text{STRIDE_MAX} + 2^{32}> 2^{31}-1$。
+
+最终得到 $\text{STRIDE_MAX}\ -\ \text{STRIDE_MIN}<2^{31}+1$。
+
+当然和性质1合并之后就得到 $\text{STRIDE_MAX}\ -\ \text{STRIDE_MIN}\le \text{BIG_STRIDE}\le 2^{31}-1<2^{31}+1$。
+
+看上去性质2毫无作用，但事实上这是一个保险，能够确保数值上较小的那个数字减去较大的数字，在转换成有符号数之后，**一定**是个负数。而在指导书中没有提到。
+
+显然，`BIG_STRIDE` 最大取到 $2^{31}-1$，本实验中我取值为 $2^{30}$。当然，如果取小了会导致 `pass` 难以区分不同的 `priority`，不再赘述。
